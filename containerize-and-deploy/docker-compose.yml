@@ -1,0 +1,59 @@
+version: "3.9"
+
+x-common-env: &common-env
+  REDIS_URL: redis://redis:6379/0
+  METRICS_INGEST_URL: http://metrics-ingest:8080/ingest
+  WORKER_POOL_SIZE: ${WORKER_POOL_SIZE:-4}
+  JOURNEY_TIMEOUT_SEC: ${JOURNEY_TIMEOUT_SEC:-30}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  metrics-ingest:
+    image: ghcr.io/synthetic-monitoring/metrics-ingest:latest
+    ports:
+      - "8080:8080"
+    environment:
+      STORAGE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: containerize-and-deploy/Dockerfile
+      target: scheduler
+    environment:
+      <<: *common-env
+      SCHEDULE_INTERVAL_SEC: ${SCHEDULE_INTERVAL_SEC:-60}
+    depends_on:
+      redis:
+        condition: service_healthy
+      metrics-ingest:
+        condition: service_started
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: containerize-and-deploy/Dockerfile
+      target: worker
+    environment: *common-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      metrics-ingest:
+        condition: service_started
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    restart: unless-stopped
